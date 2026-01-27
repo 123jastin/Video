@@ -8,7 +8,297 @@ const formatCount = (num: number): string => {
     return num.toString();
 };
 
-// --- PROFESSIONAL DUAL-THUMB PRECISION AUDIO TRIMMER ---
+// --- PROFESSIONAL BEAUTY FILTERS ---
+const EFFECTS = [
+    { id: 'none', name: 'Original', filter: 'none' },
+    { id: 'beautify', name: 'Glamour', filter: 'brightness(1.1) contrast(1.05) saturate(1.2)' },
+    { id: 'soft', name: 'Soft Glow', filter: 'brightness(1.05) blur(0.4px) contrast(0.95)' },
+    { id: 'vintage', name: 'Vintage', filter: 'sepia(0.3) contrast(0.9) brightness(0.9)' },
+    { id: 'noir', name: 'Noir', filter: 'grayscale(1) contrast(1.2)' },
+];
+
+// --- CAMERA STUDIO WITH BUILT-IN PROCESSING ---
+const CameraStudio: React.FC<{ 
+    onCapture: (blob: Blob) => void, 
+    onClose: () => void,
+    selectedSound?: any
+}> = ({ onCapture, onClose, selectedSound }) => {
+    const [isRecording, setIsRecording] = useState(false);
+    const [activeEffect, setActiveEffect] = useState(EFFECTS[0]);
+    const [amplifierLevel, setAmplifierLevel] = useState(2.0); // 200% boost
+    const [recordingTime, setRecordingTime] = useState(0);
+    const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+    const [cameraError, setCameraError] = useState<string | null>(null);
+    
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const processedStreamRef = useRef<MediaStream | null>(null);
+    const chunksRef = useRef<Blob[]>([]);
+    const timerRef = useRef<any>(null);
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const requestRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        startCamera();
+        return () => {
+            stopCamera();
+            if (timerRef.current) clearInterval(timerRef.current);
+            if (requestRef.current) cancelAnimationFrame(requestRef.current);
+            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+                audioContextRef.current.close();
+            }
+        };
+    }, [facingMode]);
+
+    const startCamera = async () => {
+        setCameraError(null);
+        try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error("Your browser doesn't support video recording.");
+            }
+
+            const rawStream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }, 
+                audio: { 
+                    echoCancellation: true, 
+                    noiseSuppression: true,
+                    autoGainControl: false
+                } 
+            });
+            
+            streamRef.current = rawStream;
+
+            // 1. SETUP AUDIO AMPLIFICATION
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            audioContextRef.current = new AudioContextClass();
+            const source = audioContextRef.current.createMediaStreamSource(rawStream);
+            const gainNode = audioContextRef.current.createGain();
+            const destination = audioContextRef.current.createMediaStreamDestination();
+            
+            gainNode.gain.value = amplifierLevel;
+            source.connect(gainNode);
+            gainNode.connect(destination);
+
+            // 2. SETUP VIDEO PREVIEW
+            if (videoRef.current) {
+                videoRef.current.srcObject = rawStream;
+                videoRef.current.onloadedmetadata = () => {
+                    if (canvasRef.current && videoRef.current) {
+                        canvasRef.current.width = videoRef.current.videoWidth;
+                        canvasRef.current.height = videoRef.current.videoHeight;
+                        processVideo();
+                    }
+                };
+            }
+
+            // 3. CAPTURE CANVAS STREAM (30fps)
+            const canvasStream = (canvasRef.current as any).captureStream(30);
+            
+            // 4. MIX PROCESSED VIDEO & AMPLIFIED AUDIO
+            const finalStream = new MediaStream([
+                canvasStream.getVideoTracks()[0],
+                destination.stream.getAudioTracks()[0]
+            ]);
+            
+            processedStreamRef.current = finalStream;
+
+        } catch (err: any) {
+            console.error("Camera access failed", err);
+            let msg = "Camera access denied.";
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message?.includes('Permission')) {
+                msg = "Please allow Camera and Microphone access in your browser settings to record live videos.";
+            }
+            setCameraError(msg);
+        }
+    };
+
+    const processVideo = () => {
+        const ctx = canvasRef.current?.getContext('2d');
+        if (ctx && videoRef.current && canvasRef.current) {
+            ctx.filter = activeEffect.filter;
+            if (facingMode === 'user') {
+                ctx.save();
+                ctx.translate(canvasRef.current.width, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+            if (facingMode === 'user') {
+                ctx.restore();
+            }
+            requestRef.current = requestAnimationFrame(processVideo);
+        }
+    };
+
+    const stopCamera = () => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+        if (videoRef.current) videoRef.current.srcObject = null;
+        if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+
+    const toggleRecording = () => {
+        if (isRecording) {
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
+            }
+            setIsRecording(false);
+            if (timerRef.current) clearInterval(timerRef.current);
+        } else {
+            const stream = processedStreamRef.current;
+            
+            // CRITICAL FIX: Ensure MediaStream is active before starting
+            if (!stream || !(stream instanceof MediaStream) || !stream.active) {
+                alert("Preparing camera... Please try again in a second.");
+                return;
+            }
+
+            const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') 
+                ? 'video/webm;codecs=vp9' 
+                : MediaRecorder.isTypeSupported('video/webm') 
+                    ? 'video/webm' 
+                    : 'video/mp4';
+
+            try {
+                const recorder = new MediaRecorder(stream, { mimeType });
+                mediaRecorderRef.current = recorder;
+                chunksRef.current = [];
+
+                recorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) chunksRef.current.push(e.data);
+                };
+
+                recorder.onstop = () => {
+                    const blob = new Blob(chunksRef.current, { type: mimeType });
+                    onCapture(blob);
+                };
+
+                recorder.start(100); 
+                setIsRecording(true);
+                setRecordingTime(0);
+                timerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
+            } catch (err) {
+                console.error("Recording start failed", err);
+                alert("Recording error. Try refreshing or using a different browser.");
+            }
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[600] bg-black flex flex-col font-sans overflow-hidden animate-fade-in">
+            <div className="relative flex-1 bg-[#050505] flex items-center justify-center">
+                <canvas ref={canvasRef} className="hidden" />
+                
+                {cameraError ? (
+                    <div className="p-8 text-center max-w-sm">
+                        <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <i className="fas fa-video-slash text-red-500 text-3xl"></i>
+                        </div>
+                        <h3 className="text-white font-black text-xl mb-3 uppercase tracking-tight">Camera Restricted</h3>
+                        <p className="text-white/60 text-sm mb-10 leading-relaxed">{cameraError}</p>
+                        <div className="flex flex-col gap-3">
+                            <button onClick={startCamera} className="bg-[#1877F2] text-white px-8 py-4 rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all">
+                                Try Again
+                            </button>
+                            <button onClick={onClose} className="bg-white/5 text-white px-8 py-4 rounded-2xl font-black text-sm active:scale-95 transition-all border border-white/10">
+                                Go Back
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <video 
+                        ref={videoRef} 
+                        autoPlay 
+                        muted 
+                        playsInline 
+                        className="w-full h-full object-cover transition-all duration-300"
+                        style={{ filter: activeEffect.filter, transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+                    />
+                )}
+                
+                {!cameraError && (
+                    <div className="absolute inset-0 z-10 flex flex-col pointer-events-none">
+                        {/* Control Header */}
+                        <div className="p-6 flex justify-between items-start pointer-events-auto">
+                            <button onClick={onClose} className="w-11 h-11 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white border border-white/10 active:scale-90 transition-transform">
+                                <i className="fas fa-times text-lg"></i>
+                            </button>
+                            {isRecording && (
+                                <div className="bg-red-600/80 backdrop-blur-md px-4 py-1.5 rounded-full flex items-center gap-2 border border-white/20 animate-pulse">
+                                    <div className="w-2 h-2 rounded-full bg-white"></div>
+                                    <span className="text-white text-sm font-black tracking-widest">{Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
+                                </div>
+                            )}
+                            <button onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')} className="w-11 h-11 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white border border-white/10 active:scale-90 transition-transform">
+                                <i className="fas fa-sync-alt text-lg"></i>
+                            </button>
+                        </div>
+
+                        {/* Effects Panel */}
+                        <div className="mt-auto mb-36 ml-auto p-4 flex flex-col gap-6 pointer-events-auto">
+                            <div className="flex flex-col items-center gap-1 cursor-pointer group" onClick={() => setAmplifierLevel(prev => prev >= 4.0 ? 1.0 : prev + 1.0)}>
+                                <div className={`w-12 h-12 rounded-2xl bg-black/40 backdrop-blur-md flex items-center justify-center border transition-all ${amplifierLevel > 1.0 ? 'text-[#1877F2] border-[#1877F2] shadow-[0_0_15px_rgba(24,119,242,0.3)]' : 'text-white border-white/10'}`}>
+                                    <i className="fas fa-microphone-alt text-lg"></i>
+                                </div>
+                                <span className="text-[9px] font-black text-white uppercase tracking-widest">{amplifierLevel === 1.0 ? 'Voice' : `${Math.round(amplifierLevel * 100)}%`}</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {!cameraError && (
+                    <>
+                        {/* Professional Horizontal Filters */}
+                        <div className="absolute bottom-32 left-0 right-0 z-20 flex gap-4 overflow-x-auto px-6 scrollbar-hide py-2 pointer-events-auto">
+                            {EFFECTS.map(effect => (
+                                <button 
+                                    key={effect.id}
+                                    onClick={() => setActiveEffect(effect)}
+                                    className={`flex-shrink-0 flex flex-col items-center gap-2 transition-all ${activeEffect.id === effect.id ? 'scale-110' : 'opacity-40 scale-90'}`}
+                                >
+                                    <div className="w-14 h-14 rounded-full border-2 border-white overflow-hidden bg-gray-900 shadow-2xl">
+                                        <div className="w-full h-full" style={{ background: 'linear-gradient(45deg, #1877F2, #F3425F)', filter: effect.filter }}></div>
+                                    </div>
+                                    <span className="text-[10px] font-black text-white uppercase tracking-tighter whitespace-nowrap">{effect.name}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Professional Recording Trigger */}
+                        <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-12 px-8 z-30 pointer-events-auto">
+                            <button className="w-12 h-12 rounded-full bg-black/40 flex items-center justify-center text-white border border-white/10 active:scale-90 transition-transform">
+                                <i className="fas fa-bolt text-sm"></i>
+                            </button>
+                            
+                            <div 
+                                onClick={toggleRecording}
+                                className="w-24 h-24 rounded-full border-4 border-white flex items-center justify-center cursor-pointer active:scale-95 transition-all bg-white/5 backdrop-blur-sm relative"
+                            >
+                                {isRecording ? (
+                                    <div className="relative flex items-center justify-center">
+                                        <div className="absolute w-14 h-14 bg-red-600 rounded-xl animate-pulse opacity-40"></div>
+                                        <div className="w-10 h-10 rounded-xl bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.8)] border border-white/20"></div>
+                                    </div>
+                                ) : (
+                                    <div className="w-18 h-18 rounded-full bg-red-600 shadow-[0_0_25px_rgba(220,38,38,0.5)] border-2 border-white/30"></div>
+                                )}
+                            </div>
+
+                            <button className="w-12 h-12 rounded-full bg-black/40 flex items-center justify-center text-white border border-white/10 active:scale-90 transition-transform">
+                                <i className="fas fa-magic text-sm"></i>
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- PRECISION AUDIO TRIMMER ---
 const AudioTrimmer: React.FC<{ 
     url: string, 
     onClose: () => void, 
@@ -176,6 +466,7 @@ export const CreateReelModal: React.FC<{
     const [audioEnd, setAudioEnd] = useState(initialSound?.end || 0);
     const [isMusicPickerOpen, setIsMusicPickerOpen] = useState(false);
     const [isTrimmerOpen, setIsTrimmerOpen] = useState(false);
+    const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [isStudioPlaying, setIsStudioPlaying] = useState(false);
     const [musicSearch, setMusicSearch] = useState('');
     
@@ -191,7 +482,7 @@ export const CreateReelModal: React.FC<{
         );
     }, [musicSearch]);
 
-    // Enhanced Sync Engine for Studio
+    // Studio Player Controller
     useEffect(() => {
         if (mediaPreview && selectedAudio && audioRef.current && videoRef.current) {
             const audio = audioRef.current;
@@ -200,7 +491,6 @@ export const CreateReelModal: React.FC<{
             if (isStudioPlaying) {
                 const sync = () => {
                     const expectedAudioTime = video.currentTime + audioStart;
-                    // Robust 0.5s threshold to prevent stuttering
                     if (Math.abs(audio.currentTime - expectedAudioTime) > 0.5) {
                         audio.currentTime = expectedAudioTime;
                     }
@@ -249,84 +539,126 @@ export const CreateReelModal: React.FC<{
         }, 2000);
     };
 
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files?.[0]) {
+            const file = e.target.files[0];
+            setMediaPreview(URL.createObjectURL(file));
+            setIsStudioPlaying(true);
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-[500] bg-black flex flex-col font-sans animate-fade-in text-white overflow-hidden">
+            {isCameraOpen && (
+                <CameraStudio 
+                    selectedSound={selectedAudio} 
+                    onCapture={(blob) => { 
+                        setMediaPreview(URL.createObjectURL(blob)); 
+                        setIsCameraOpen(false); 
+                        setIsStudioPlaying(true);
+                    }} 
+                    onClose={() => setIsCameraOpen(false)} 
+                />
+            )}
+            
             <div className="absolute inset-0 z-0 bg-[#050505] flex items-center justify-center">
                 {mediaPreview ? (
                     <div className="relative w-full h-full" onClick={() => setIsStudioPlaying(!isStudioPlaying)}>
-                        <video ref={videoRef} src={mediaPreview} className="w-full h-full object-cover opacity-70" loop muted={!!selectedAudio} />
+                        <video ref={videoRef} src={mediaPreview} className="w-full h-full object-cover opacity-80" loop muted={!!selectedAudio} playsInline />
                         {!isStudioPlaying && (
                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                <div className="w-16 h-16 bg-black/40 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20 shadow-2xl">
-                                    <i className="fas fa-play text-white text-2xl ml-1"></i>
+                                <div className="w-20 h-20 bg-black/50 rounded-full flex items-center justify-center backdrop-blur-md border border-white/20 shadow-2xl">
+                                    <i className="fas fa-play text-white text-3xl ml-1"></i>
                                 </div>
                             </div>
                         )}
                     </div>
                 ) : (
-                    <div className="text-center p-12 max-w-[300px]">
-                        <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/5 mx-auto">
-                            <i className="fas fa-video text-3xl text-[#1877F2]"></i>
+                    <div className="text-center p-12 max-w-[320px] animate-fade-in">
+                        <div className="w-24 h-24 bg-white/5 rounded-[40px] flex items-center justify-center mb-8 border border-white/10 mx-auto shadow-2xl">
+                            <i className="fas fa-clapperboard text-4xl text-[#1877F2] animate-pulse"></i>
                         </div>
-                        <h2 className="text-2xl font-black mb-2 tracking-tight uppercase leading-none">Video Studio</h2>
-                        <p className="text-white/40 text-xs font-medium">Select a video to begin production</p>
+                        <h2 className="text-3xl font-black mb-3 tracking-tighter uppercase leading-none">Studio</h2>
+                        <p className="text-white/50 text-[14px] font-medium leading-relaxed">Choose your production style to share with the community.</p>
                     </div>
                 )}
                 {selectedAudio && <audio ref={audioRef} src={selectedAudio.url} hidden />}
             </div>
 
-            <div className="relative z-20 h-14 flex items-center justify-between px-6 bg-gradient-to-b from-black/80 to-transparent pt-2">
-                <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center border border-white/10">
-                    <i className="fas fa-times text-xs"></i>
+            <div className="relative z-20 h-16 flex items-center justify-between px-6 bg-gradient-to-b from-black/90 to-transparent pt-2">
+                <button onClick={onClose} className="w-11 h-11 rounded-full bg-white/10 flex items-center justify-center border border-white/10 active:scale-90 transition-transform">
+                    <i className="fas fa-times text-lg"></i>
                 </button>
                 <div className="flex flex-col items-center">
-                    <span className="text-[9px] font-black uppercase tracking-[3px] text-[#1877F2]">Sync Master</span>
+                    <span className="text-[10px] font-black uppercase tracking-[5px] text-[#1877F2]">UNERA PRO</span>
                 </div>
-                <button onClick={handleUpload} disabled={!mediaPreview || isUploading} className="bg-[#1877F2] text-white px-5 py-1.5 rounded-lg font-black text-xs shadow-lg active:scale-95 transition-all">
-                    {isUploading ? '...' : 'Next'}
+                <button onClick={handleUpload} disabled={!mediaPreview || isUploading} className="bg-[#1877F2] text-white px-7 py-2.5 rounded-2xl font-black text-xs shadow-xl active:scale-95 transition-all disabled:opacity-30 disabled:grayscale">
+                    {isUploading ? 'Sending...' : 'Publish'}
                 </button>
             </div>
 
             {mediaPreview && (
-                <div className="absolute right-4 top-[20%] z-20 flex flex-col gap-5">
-                    <button onClick={() => setIsMusicPickerOpen(true)} className="flex flex-col items-center gap-1.5">
-                        <div className={`w-11 h-11 rounded-xl flex items-center justify-center backdrop-blur-xl transition-all border ${selectedAudio ? 'bg-[#1877F2] border-blue-400' : 'bg-white/5 border-white/10'}`}>
-                            <i className="fas fa-music text-sm"></i>
+                <div className="absolute right-6 top-[25%] z-20 flex flex-col gap-6">
+                    <button onClick={() => setIsMusicPickerOpen(true)} className="flex flex-col items-center gap-2">
+                        <div className={`w-14 h-14 rounded-3xl flex items-center justify-center backdrop-blur-2xl transition-all border-2 ${selectedAudio ? 'bg-[#1877F2] border-blue-400 shadow-[0_0_20px_rgba(24,119,242,0.4)]' : 'bg-black/40 border-white/10'}`}>
+                            <i className="fas fa-music text-xl"></i>
                         </div>
-                        <span className="text-[8px] font-black uppercase text-white/60">Audio</span>
+                        <span className="text-[10px] font-black uppercase text-white/70 tracking-widest">Sound</span>
                     </button>
                     {selectedAudio && (
-                        <button onClick={() => setIsTrimmerOpen(true)} className="flex flex-col items-center gap-1.5 animate-fade-in">
-                            <div className="w-11 h-11 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center backdrop-blur-xl">
-                                <i className="fas fa-scissors text-sm"></i>
+                        <button onClick={() => setIsTrimmerOpen(true)} className="flex flex-col items-center gap-2 animate-fade-in">
+                            <div className="w-14 h-14 rounded-3xl bg-black/40 border-2 border-white/10 flex items-center justify-center backdrop-blur-2xl">
+                                <i className="fas fa-scissors text-xl"></i>
                             </div>
-                            <span className="text-[8px] font-black uppercase text-white/60">Crop</span>
+                            <span className="text-[10px] font-black uppercase text-white/70 tracking-widest">Trim</span>
                         </button>
                     )}
-                    <button onClick={() => setMediaPreview(null)} className="flex flex-col items-center gap-1.5">
-                        <div className="w-11 h-11 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 flex items-center justify-center backdrop-blur-xl">
-                            <i className="fas fa-trash-alt text-sm"></i>
+                    <button onClick={() => setMediaPreview(null)} className="flex flex-col items-center gap-2">
+                        <div className="w-14 h-14 rounded-3xl bg-red-600/20 border-2 border-red-600/30 text-red-500 flex items-center justify-center backdrop-blur-2xl">
+                            <i className="fas fa-trash-alt text-xl"></i>
                         </div>
-                        <span className="text-[8px] font-black uppercase text-red-500/60">Reset</span>
+                        <span className="text-[10px] font-black uppercase text-red-500/70 tracking-widest">Discard</span>
                     </button>
                 </div>
             )}
 
             {!mediaPreview && (
-                <div className="flex-1 flex items-center justify-center px-10">
-                    <input type="file" id="video-input" className="hidden" accept="video/*" onChange={(e) => e.target.files?.[0] && setMediaPreview(URL.createObjectURL(e.target.files[0]))} />
-                    <label htmlFor="video-input" className="w-full max-w-[300px] aspect-[9/16] border-2 border-dashed border-white/10 rounded-[32px] flex flex-col items-center justify-center cursor-pointer bg-black/20 backdrop-blur-md">
-                        <i className="fas fa-cloud-upload-alt text-3xl text-white/20 mb-3"></i>
-                        <p className="font-black uppercase text-[10px] tracking-widest text-white/40">Import Video</p>
+                <div className="flex-1 flex flex-col items-center justify-center px-10 gap-8 z-10 animate-fade-in">
+                    {/* OPTION 1: RECORD LIVE */}
+                    <button 
+                        onClick={() => setIsCameraOpen(true)}
+                        className="w-full max-w-[340px] bg-[#1877F2] rounded-[40px] p-10 flex flex-col items-center justify-center cursor-pointer shadow-[0_20px_60px_rgba(24,119,242,0.4)] active:scale-95 transition-all group overflow-hidden relative"
+                    >
+                        <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full -mr-20 -mt-20 blur-3xl"></div>
+                        <div className="w-20 h-20 rounded-3xl bg-white/20 flex items-center justify-center mb-6 shadow-2xl group-hover:scale-110 transition-transform">
+                            <i className="fas fa-video text-white text-4xl"></i>
+                        </div>
+                        <p className="font-black uppercase text-lg tracking-[5px] text-white">Record Live</p>
+                        <p className="text-white/60 text-[11px] font-bold mt-2 uppercase tracking-[2px]">Filters + Enhanced Audio</p>
+                    </button>
+
+                    <div className="flex items-center gap-6 w-full max-w-[340px]">
+                        <div className="h-[1px] bg-white/10 flex-1"></div>
+                        <span className="text-[11px] font-black text-white/20 uppercase tracking-widest">OR</span>
+                        <div className="h-[1px] bg-white/10 flex-1"></div>
+                    </div>
+
+                    {/* OPTION 2: IMPORT MOBILE */}
+                    <input type="file" id="video-input-mobile" className="hidden" accept="video/*" onChange={handleFileSelect} />
+                    <label htmlFor="video-input-mobile" className="w-full max-w-[340px] bg-white/5 border border-white/10 rounded-[32px] py-8 flex items-center justify-center gap-5 cursor-pointer active:scale-95 transition-all hover:bg-white/10 group">
+                        <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center group-hover:bg-[#1877F2]/20 transition-colors">
+                            <i className="fas fa-cloud-upload-alt text-2xl text-[#B0B3B8] group-hover:text-[#1877F2]"></i>
+                        </div>
+                        <p className="font-black uppercase text-sm tracking-[3px] text-[#E4E6EB]">Upload from phone</p>
                     </label>
                 </div>
             )}
 
             {mediaPreview && (
-                <div className="mt-auto relative z-20 p-6 bg-gradient-to-t from-black via-black/60 to-transparent pb-10">
+                <div className="mt-auto relative z-20 p-8 bg-gradient-to-t from-black via-black/80 to-transparent pb-16">
                     <textarea 
-                        className="w-full bg-white/5 backdrop-blur-3xl border border-white/10 rounded-2xl p-4 text-[16px] outline-none h-24 resize-none font-medium leading-tight shadow-inner"
-                        placeholder="Write a caption..."
+                        className="w-full bg-white/5 backdrop-blur-3xl border border-white/10 rounded-[32px] p-8 text-[18px] outline-none h-40 resize-none font-medium leading-relaxed shadow-inner text-white placeholder-white/20"
+                        placeholder="Add a caption to your viral moment..."
                         value={caption}
                         onChange={e => setCaption(e.target.value)}
                     />
@@ -345,50 +677,55 @@ export const CreateReelModal: React.FC<{
 
             {isMusicPickerOpen && (
                 <div className="fixed inset-0 z-[700] bg-[#0A0A0A] flex flex-col animate-slide-up">
-                    <div className="h-14 px-6 flex items-center justify-between border-b border-white/5 bg-[#121212] shrink-0">
-                        <button onClick={() => setIsMusicPickerOpen(false)} className="text-[#B0B3B8] font-black uppercase text-[10px] tracking-widest">Back</button>
-                        <h3 className="font-black text-white uppercase tracking-[4px] text-[10px]">Select Sound</h3>
-                        <div className="w-8"></div>
+                    <div className="h-16 px-6 flex items-center justify-between border-b border-white/5 bg-[#121212] shrink-0">
+                        <button onClick={() => setIsMusicPickerOpen(false)} className="text-[#B0B3B8] font-black uppercase text-[11px] tracking-widest px-4 py-2 rounded-xl hover:bg-white/5 transition-all">Cancel</button>
+                        <h3 className="font-black text-white uppercase tracking-[6px] text-[12px]">Library</h3>
+                        <div className="w-20"></div>
                     </div>
                     
-                    <div className="p-4 bg-[#121212] shrink-0">
+                    <div className="p-6 bg-[#121212] shrink-0">
                         <div className="relative">
-                            <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-white/20"></i>
+                            <i className="fas fa-search absolute left-5 top-1/2 -translate-y-1/2 text-white/20"></i>
                             <input 
                                 type="text"
-                                className="w-full bg-white/5 border border-white/5 rounded-2xl p-3 pl-11 text-white outline-none focus:ring-1 focus:ring-[#1877F2] font-medium"
-                                placeholder="Search UNERA sounds..."
+                                className="w-full bg-white/5 border border-white/5 rounded-2xl p-4 pl-12 text-white outline-none focus:ring-2 focus:ring-[#1877F2]/50 font-medium transition-all"
+                                placeholder="Search UNERA Music..."
                                 value={musicSearch}
                                 onChange={(e) => setMusicSearch(e.target.value)}
                             />
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
                         <div 
                             onClick={() => audioUploadRef.current?.click()}
-                            className="bg-gradient-to-r from-[#1877F2]/20 to-transparent border border-[#1877F2]/30 p-5 rounded-2xl flex items-center gap-4 cursor-pointer hover:bg-[#1877F2]/30 transition-all active:scale-95 mb-2"
+                            className="bg-gradient-to-br from-[#1877F2]/30 to-[#1877F2]/10 border border-[#1877F2]/40 p-8 rounded-[32px] flex items-center gap-6 cursor-pointer hover:from-[#1877F2]/40 transition-all active:scale-95 shadow-2xl"
                         >
-                            <div className="w-12 h-12 bg-[#1877F2] rounded-xl flex items-center justify-center shadow-lg">
-                                <i className="fas fa-file-import text-white text-xl"></i>
+                            <div className="w-16 h-16 bg-[#1877F2] rounded-2xl flex items-center justify-center shadow-2xl">
+                                <i className="fas fa-plus text-white text-3xl"></i>
                             </div>
                             <div>
-                                <p className="font-black text-white">Import from Phone</p>
-                                <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest">MP3, WAV, AAC</p>
+                                <p className="font-black text-white text-xl">Import Audio</p>
+                                <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mt-1">From your device storage</p>
                             </div>
                             <input type="file" ref={audioUploadRef} className="hidden" accept="audio/*" onChange={handleAudioUpload} />
                         </div>
 
-                        <div className="h-px bg-white/5 my-2"></div>
+                        <div className="h-[1px] bg-white/5 my-6"></div>
 
                         {filteredSongs.map(song => (
-                            <div key={song.id} onClick={() => { setSelectedAudio({ url: song.audioUrl, name: song.title }); setAudioStart(0); setAudioEnd(0); setIsMusicPickerOpen(false); setIsTrimmerOpen(true); }} className="bg-white/5 p-3 rounded-2xl flex items-center gap-4 active:scale-95 transition-transform border border-transparent hover:border-white/10 group">
-                                <img src={song.cover} className="w-12 h-12 rounded-xl object-cover shadow-lg" alt="" />
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-black text-sm truncate group-hover:text-[#1877F2] transition-colors">{song.title}</p>
-                                    <p className="text-white/40 text-[10px] font-bold truncate">{song.artist}</p>
+                            <div key={song.id} onClick={() => { setSelectedAudio({ url: song.audioUrl, name: song.title }); setAudioStart(0); setAudioEnd(0); setIsMusicPickerOpen(false); setIsTrimmerOpen(true); }} className="bg-white/5 p-5 rounded-[24px] flex items-center gap-5 active:scale-95 transition-all border border-transparent hover:border-white/10 group">
+                                <div className="relative w-16 h-16 shrink-0">
+                                    <img src={song.cover} className="w-full h-full rounded-2xl object-cover shadow-2xl" alt="" />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl">
+                                        <i className="fas fa-play text-white text-xs"></i>
+                                    </div>
                                 </div>
-                                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-[#1877F2]"><i className="fas fa-plus text-xs"></i></div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="font-black text-lg truncate text-white">{song.title}</p>
+                                    <p className="text-white/40 text-[11px] font-bold truncate tracking-widest uppercase mt-0.5">{song.artist}</p>
+                                </div>
+                                <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[#1877F2] border border-white/5 shadow-inner"><i className="fas fa-plus"></i></div>
                             </div>
                         ))}
                     </div>
@@ -408,61 +745,58 @@ interface SoundDetailViewProps {
 }
 
 const SoundDetailView: React.FC<SoundDetailViewProps> = ({ sound, reels, onClose, onUseSound, onReelClick }) => {
-    // Filter reels that use this specific sound
     const matchingCreations = reels.filter(r => r.songName === sound.name || r.audioUrl === sound.url);
     const creationCountStr = matchingCreations.length >= 1000 ? (matchingCreations.length / 1000).toFixed(1) + 'K' : matchingCreations.length;
 
     return (
         <div className="fixed inset-0 z-[600] bg-black flex flex-col animate-fade-in font-sans pb-20 overflow-hidden">
-            {/* Header */}
-            <div className="h-16 px-4 flex items-center justify-between border-b border-white/5 bg-black/80 backdrop-blur-xl shrink-0">
-                <button onClick={onClose} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white active:scale-90 transition-transform">
+            <div className="h-16 px-4 flex items-center justify-between border-b border-white/10 bg-black/90 backdrop-blur-xl shrink-0">
+                <button onClick={onClose} className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white active:scale-90 transition-transform">
                     <i className="fas fa-chevron-left text-sm"></i>
                 </button>
-                <div className="flex flex-col items-center max-w-[250px]">
-                    <h3 className="font-black text-white text-[12px] uppercase tracking-[4px] truncate w-full text-center">Sound Detail</h3>
-                </div>
-                <button className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white">
+                <h3 className="font-black text-white text-[12px] uppercase tracking-[4px]">Sound Detail</h3>
+                <button className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white">
                     <i className="fas fa-share-alt text-sm"></i>
                 </button>
             </div>
             
-            {/* Sound Hero Section */}
-            <div className="p-8 flex flex-col md:flex-row items-center gap-8 bg-gradient-to-b from-white/5 to-transparent shrink-0">
+            <div className="p-8 flex flex-col md:flex-row items-center gap-10 bg-gradient-to-b from-white/10 to-transparent shrink-0">
                 <div className="relative group">
-                    <div className="w-32 h-32 rounded-full bg-gradient-to-tr from-gray-900 via-gray-800 to-black shadow-[0_0_40px_rgba(0,0,0,0.8)] border-[3px] border-white/10 flex items-center justify-center animate-spin-slow">
-                        <div className="w-10 h-10 rounded-full bg-[#1877F2]/20 border border-white/5 flex items-center justify-center">
-                            <i className="fas fa-music text-[#1877F2] text-xl"></i>
+                    <div className="w-36 h-36 rounded-full bg-gradient-to-tr from-gray-950 via-gray-900 to-black shadow-[0_0_50px_rgba(0,0,0,0.9)] border-4 border-white/20 flex items-center justify-center animate-spin-slow">
+                        <div className="w-12 h-12 rounded-full bg-[#1877F2]/20 border border-white/10 flex items-center justify-center">
+                            <i className="fas fa-music text-[#1877F2] text-2xl"></i>
                         </div>
                     </div>
                 </div>
 
                 <div className="flex-1 text-center md:text-left">
-                    <h2 className="text-3xl font-black text-white mb-1 leading-tight tracking-tighter">
-                        Original Sound - {sound.creator?.name || 'User'}
+                    <h2 className="text-3xl font-black text-white mb-2 leading-tight tracking-tighter">
+                        {sound.name}
                     </h2>
-                    <p className="text-[#B0B3B8] font-black text-xs uppercase tracking-[4px] mb-6">
-                        {creationCountStr} CREATIONS
+                    <p className="text-[#1877F2] font-black text-sm uppercase tracking-widest mb-1">
+                        BY {sound.creator?.name || 'Original Artist'}
+                    </p>
+                    <p className="text-[#B0B3B8] font-bold text-xs uppercase tracking-[4px] mb-8">
+                        {creationCountStr} VIRAL CREATIONS
                     </p>
                     
                     <button 
                         onClick={() => onUseSound(sound)} 
-                        className="bg-[#1877F2] text-white px-10 py-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3 w-full md:w-fit"
+                        className="bg-[#1877F2] text-white px-12 py-4 rounded-2xl font-black text-base shadow-2xl shadow-blue-500/30 active:scale-95 transition-all flex items-center justify-center gap-3 w-full md:w-fit"
                     >
-                        <i className="fas fa-video text-sm"></i> Use this sound
+                        <i className="fas fa-clapperboard text-sm"></i> Use this sound
                     </button>
                 </div>
             </div>
 
-            {/* Creations Grid */}
             <div className="flex-1 overflow-y-auto px-0.5 mt-4">
                 <div className="grid grid-cols-3 gap-0.5">
                     {matchingCreations.map((r: Reel) => (
                         <div key={r.id} onClick={() => onReelClick(r.id)} className="aspect-[9/16] bg-white/5 relative cursor-pointer group overflow-hidden">
-                            <video src={r.videoUrl} className="w-full h-full object-cover group-hover:scale-105 transition-transform" muted />
-                            <div className="absolute bottom-2 left-2 flex items-center gap-1 text-white text-[10px] font-black drop-shadow-md bg-black/20 px-1.5 py-0.5 rounded backdrop-blur-sm">
+                            <video src={r.videoUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform" muted playsInline />
+                            <div className="absolute bottom-2 left-2 flex items-center gap-1.5 text-white text-[10px] font-black bg-black/40 px-2 py-1 rounded-lg backdrop-blur-md">
                                 <i className="fas fa-play text-[8px]"></i> 
-                                {formatCount(r.shares * 15 + r.reactions.length * 2)} 
+                                {formatCount(r.shares * 20 + r.reactions.length * 5)} 
                             </div>
                         </div>
                     ))}
@@ -494,7 +828,6 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
         return () => observer.disconnect();
     }, [reels]);
 
-    // Robust Phase-Sync Engine for Feed
     useEffect(() => {
         Object.keys(videoRefs.current).forEach((key) => {
             const id = Number(key);
@@ -513,15 +846,11 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
                         
                         const handleAudioSync = () => {
                             const expectedAudioTime = video.currentTime + start;
-                            
-                            // Check for looping
                             if (audio.currentTime >= end || expectedAudioTime >= end) {
                                 audio.currentTime = start;
                                 video.currentTime = 0;
                                 return;
                             }
-
-                            // Professional Sync Threshold (0.5s) to avoid buffering/stuttering
                             const drift = Math.abs(audio.currentTime - expectedAudioTime);
                             if (drift > 0.5) {
                                 audio.currentTime = expectedAudioTime;
@@ -567,78 +896,77 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
 
                             {playingReelId !== reel.id && (
                                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                    <div className="w-20 h-20 bg-black/30 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/10">
+                                    <div className="w-20 h-20 bg-black/40 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20">
                                         <i className="fas fa-play text-white text-3xl ml-1"></i>
                                     </div>
                                 </div>
                             )}
 
-                            {/* VIDEOS INFO OVERLAY */}
-                            <div className="absolute bottom-0 left-0 w-full p-4 z-20 pb-12 bg-gradient-to-t from-black/90 via-transparent to-transparent">
-                                <div className="flex flex-col gap-3">
+                            <div className="absolute bottom-0 left-0 w-full p-4 z-20 pb-12 bg-gradient-to-t from-black/95 via-transparent to-transparent">
+                                <div className="flex flex-col gap-4">
                                     <div className="flex items-center justify-between w-full">
                                         <div className="flex items-center gap-3">
                                             <div className="relative">
-                                                <img src={author.profileImage} className="w-10 h-10 rounded-full border border-white/50 object-cover cursor-pointer" alt="" onClick={() => onProfileClick(author.id)} />
+                                                <img src={author.profileImage} className="w-11 h-11 rounded-full border-2 border-white/50 object-cover cursor-pointer" alt="" onClick={() => onProfileClick(author.id)} />
                                                 {currentUser?.id !== author.id && !isFollowing && (
-                                                    <div onClick={() => onFollow(author.id)} className="absolute -bottom-1 -right-1 w-4 h-4 bg-[#1877F2] rounded-full flex items-center justify-center border border-black text-white cursor-pointer">
-                                                        <i className="fas fa-plus text-[7px]"></i>
+                                                    <div onClick={() => onFollow(author.id)} className="absolute -bottom-1 -right-1 w-4.5 h-4.5 bg-[#1877F2] rounded-full flex items-center justify-center border-2 border-black text-white cursor-pointer">
+                                                        <i className="fas fa-plus text-[8px]"></i>
                                                     </div>
                                                 )}
                                             </div>
                                             <div className="flex flex-col">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-white font-black text-[15px] drop-shadow-lg cursor-pointer" onClick={() => onProfileClick(author.id)}>{author.name}</span>
-                                                    {author.isVerified && <i className="fas fa-check-circle text-[10px] text-[#1877F2]"></i>}
+                                                    <span className="text-white font-black text-[16px] drop-shadow-xl cursor-pointer" onClick={() => onProfileClick(author.id)}>{author.name}</span>
+                                                    {author.isVerified && <i className="fas fa-check-circle text-[11px] text-[#1877F2]"></i>}
                                                     {!isFollowing && currentUser?.id !== author.id && (
                                                         <button 
-                                                            onClick={() => onFollow(author.id)} 
-                                                            className="ml-1 bg-[#1877F2] text-white text-[11px] font-black px-4 py-1.5 rounded-full shadow-lg active:scale-95 transition-all"
+                                                            onClick={(e) => { e.stopPropagation(); onFollow(author.id); }} 
+                                                            className="ml-2 bg-[#1877F2] text-white text-[11px] font-black px-3 py-1 rounded-md shadow-lg active:scale-95 transition-all border-none"
                                                         >
-                                                            FOLLOW
+                                                            Follow
                                                         </button>
                                                     )}
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="flex items-center gap-4 px-2">
-                                            <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => onReact(reel.id, 'love')}>
-                                                <i className={`fas fa-heart text-[22px] transition-transform active:scale-125 ${hasLiked ? 'text-[#F3425F]' : 'text-white'}`}></i>
-                                                <span className="text-white text-[12px] font-black">{formatCount(reel.reactions.length)}</span>
+                                        <div className="flex items-center gap-5 px-1">
+                                            <div className="flex flex-col items-center gap-1 cursor-pointer group" onClick={() => onReact(reel.id, 'love')}>
+                                                <i className={`fas fa-heart text-[24px] transition-transform active:scale-150 ${hasLiked ? 'text-[#F3425F]' : 'text-white'}`}></i>
+                                                <span className="text-white text-[11px] font-black">{formatCount(reel.reactions.length)}</span>
                                             </div>
-                                            <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => setShowComments(true)}>
-                                                <i className="fas fa-comment-dots text-[22px] text-white"></i>
-                                                <span className="text-white text-[12px] font-black">{formatCount(reel.comments.length)}</span>
+                                            <div className="flex flex-col items-center gap-1 cursor-pointer group" onClick={() => setShowComments(true)}>
+                                                <i className="fas fa-comment-dots text-[24px] text-white"></i>
+                                                <span className="text-white text-[11px] font-black">{formatCount(reel.comments.length)}</span>
                                             </div>
-                                            <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => onShare(reel.id)}>
-                                                <i className="fas fa-share text-[22px] text-white"></i>
-                                                <span className="text-white text-[12px] font-black">{formatCount(reel.shares)}</span>
+                                            <div className="flex flex-col items-center gap-1 cursor-pointer group" onClick={() => onShare(reel.id)}>
+                                                <i className="fas fa-share text-[24px] text-white"></i>
+                                                <span className="text-white text-[11px] font-black">{formatCount(reel.shares)}</span>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <p className="text-white text-[14px] font-medium leading-tight drop-shadow-lg line-clamp-2">{reel.caption}</p>
+                                    <p className="text-white text-[15px] font-medium leading-snug drop-shadow-xl line-clamp-2 max-w-[85%]">{reel.caption}</p>
                                     
-                                    <div className="flex items-center justify-between w-full">
+                                    <div className="flex items-center justify-between w-full mt-2">
                                         <div 
-                                            className="flex items-center gap-2 text-white/90 text-sm w-44 bg-white/10 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 cursor-pointer overflow-hidden group" 
+                                            className="flex items-center gap-3 text-white/90 text-sm w-48 bg-white/10 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 cursor-pointer overflow-hidden active:scale-95 transition-all" 
                                             onClick={() => setSelectedSoundData(soundPayload)}
                                         >
-                                            <i className="fas fa-music text-[10px]"></i>
+                                            <i className="fas fa-music text-[10px] animate-pulse"></i>
                                             <div className="relative flex-1 overflow-hidden whitespace-nowrap">
-                                                <div className="inline-block animate-marquee-slow font-bold text-[11px] tracking-tight">
-                                                    {reel.songName} — {author.name} Original Sound
+                                                <div className="inline-block animate-marquee-slow font-black text-[12px] tracking-tight uppercase">
+                                                    {reel.songName} — {author.name} Original
                                                 </div>
                                             </div>
                                         </div>
 
                                         <div 
-                                            className={`w-10 h-10 rounded-full bg-gradient-to-tr from-gray-800 to-black flex items-center justify-center border border-white/20 shadow-2xl cursor-pointer ${playingReelId === reel.id ? 'animate-spin-slow' : ''}`} 
+                                            className={`w-11 h-11 rounded-full bg-gradient-to-tr from-gray-900 to-black flex items-center justify-center border-2 border-white/20 shadow-2xl cursor-pointer ${playingReelId === reel.id ? 'animate-spin-slow' : ''}`} 
                                             onClick={() => setSelectedSoundData(soundPayload)}
                                         >
-                                            <div className="w-5 h-5 rounded-full border border-white/10 flex items-center justify-center">
-                                                <i className="fas fa-music text-[8px] text-white/80 animate-pulse"></i>
+                                            <div className="w-6 h-6 rounded-full border border-white/10 flex items-center justify-center bg-gray-800">
+                                                <i className="fas fa-compact-disc text-[10px] text-white/80"></i>
                                             </div>
                                         </div>
                                     </div>
@@ -651,7 +979,6 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
 
             {activeReelId && <ReelCommentsSheet isOpen={showComments} onClose={() => setShowComments(false)} comments={reels.find((r: any) => r.id === activeReelId)?.comments || []} users={users} currentUser={currentUser} onAddComment={(text: string) => onComment(activeReelId, text)} />}
             
-            {/* New Sound Detail View Modal */}
             {selectedSoundData && (
                 <SoundDetailView 
                     sound={selectedSoundData} 
@@ -659,7 +986,6 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
                     onClose={() => setSelectedSoundData(null)}
                     onUseSound={(s) => { onUseSound(s); setSelectedSoundData(null); }}
                     onReelClick={(rid) => { 
-                        // Scroll to the reel in the feed
                         const el = document.querySelector(`[data-reel-id="${rid}"]`);
                         el?.scrollIntoView({ behavior: 'smooth' });
                         setActiveReelId(rid);
@@ -670,8 +996,8 @@ export const ReelsFeed: React.FC<any> = ({ reels, users, currentUser, onProfileC
             )}
 
             {currentUser && !selectedSoundData && (
-                <button onClick={onCreateReelClick} className="absolute bottom-6 right-6 w-14 h-14 bg-[#1877F2] rounded-full flex items-center justify-center text-white shadow-2xl hover:scale-105 active:scale-95 transition-all z-40 border-2 border-black">
-                    <i className="fas fa-plus text-2xl"></i>
+                <button onClick={onCreateReelClick} className="absolute bottom-8 right-6 w-16 h-16 bg-[#1877F2] rounded-full flex items-center justify-center text-white shadow-2xl hover:scale-105 active:scale-95 transition-all z-40 border-4 border-black">
+                    <i className="fas fa-plus text-3xl"></i>
                 </button>
             )}
         </div>
@@ -682,30 +1008,31 @@ const ReelCommentsSheet: React.FC<any> = ({ isOpen, onClose, comments, users, cu
     const [text, setText] = useState('');
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 z-[400] flex items-end justify-center bg-black/60 font-sans" onClick={onClose}>
-            <div className="w-full max-w-[450px] h-[65vh] bg-[#121212] rounded-t-[32px] flex flex-col animate-slide-up border-t border-white/10" onClick={e => e.stopPropagation()}>
-                <div className="p-4 border-b border-white/5 flex justify-between items-center">
-                    <span className="text-white font-black text-xs ml-4 uppercase tracking-[2px]">{comments.length} Comments</span>
-                    <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-white"><i className="fas fa-times text-xs"></i></button>
+        <div className="fixed inset-0 z-[400] flex items-end justify-center bg-black/70 font-sans backdrop-blur-sm" onClick={onClose}>
+            <div className="w-full max-w-[450px] h-[70vh] bg-[#121212] rounded-t-[40px] flex flex-col animate-slide-up border-t border-white/10 shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="p-5 border-b border-white/5 flex justify-between items-center bg-[#181818] rounded-t-[40px]">
+                    <span className="text-white font-black text-[13px] ml-4 uppercase tracking-[3px]">{comments.length} Comments</span>
+                    <button onClick={onClose} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white active:scale-90 transition-all"><i className="fas fa-times text-xs"></i></button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
                     {comments.map((c: any) => {
                         const author = users.find((u: any) => u.id === c.userId);
                         return (
-                            <div key={c.id} className="flex gap-3">
-                                <img src={author?.profileImage} className="w-9 h-9 rounded-full object-cover border border-white/5" alt="" />
+                            <div key={c.id} className="flex gap-4">
+                                <img src={author?.profileImage} className="w-10 h-10 rounded-full object-cover border-2 border-white/5" alt="" />
                                 <div className="flex-1">
-                                    <p className="text-white/40 font-black text-[10px]">{author?.name}</p>
-                                    <p className="text-[#E4E6EB] text-sm leading-snug">{c.text}</p>
+                                    <p className="text-[#1877F2] font-black text-[11px] uppercase tracking-tighter mb-0.5">{author?.name}</p>
+                                    <p className="text-[#E4E6EB] text-[15px] leading-snug font-medium">{c.text}</p>
                                 </div>
+                                <i className="far fa-heart text-[#B0B3B8] text-sm mt-1"></i>
                             </div>
                         );
                     })}
                 </div>
-                <div className="p-4 pb-8 border-t border-white/5 bg-[#0A0A0A]">
-                    <div className="flex gap-2">
-                        <input className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#1877F2]/50" placeholder="Add a comment..." value={text} onChange={e => setText(e.target.value)} />
-                        <button onClick={() => { if(text.trim()){ onAddComment(text); setText(''); } }} className="bg-[#1877F2] text-white px-4 rounded-xl flex items-center justify-center shadow-lg"><i className="fas fa-paper-plane text-xs"></i></button>
+                <div className="p-6 pb-10 border-t border-white/5 bg-[#0A0A0A]">
+                    <div className="flex gap-3">
+                        <input className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-sm text-white outline-none focus:border-[#1877F2] focus:bg-white/10 transition-all" placeholder="Add a professional comment..." value={text} onChange={e => setText(e.target.value)} />
+                        <button onClick={() => { if(text.trim()){ onAddComment(text); setText(''); } }} className="bg-[#1877F2] text-white px-6 rounded-2xl flex items-center justify-center shadow-xl active:scale-95 transition-all"><i className="fas fa-paper-plane text-xs"></i></button>
                     </div>
                 </div>
             </div>
