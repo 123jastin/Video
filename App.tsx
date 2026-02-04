@@ -13,6 +13,7 @@ import { BrandsPage } from './components/Brands';
 import { ProfilesPage } from './components/Profiles';
 import { MusicSystem, GlobalAudioPlayer } from './components/MusicSystem';
 import { ToolsPage } from './components/Tools';
+import { CreateEventModal } from './components/Events';
 import { User, Post as PostType, Story, Reel, Event, Group, Brand, Song, Episode, AudioTrack, ReactionType } from './types';
 import { INITIAL_USERS, INITIAL_POSTS, INITIAL_USERS as ALL_USERS, INITIAL_STORIES, INITIAL_REELS, INITIAL_EVENTS, INITIAL_GROUPS, INITIAL_BRANDS, MOCK_SONGS, MOCK_EPISODES } from './constants';
 
@@ -32,6 +33,7 @@ export default function App() {
     const [isLoading, setIsLoading] = useState(true);
     const [showCreatePostModal, setShowCreatePostModal] = useState(false);
     const [showCreateReelModal, setShowCreateReelModal] = useState(false);
+    const [showCreateEventModal, setShowCreateEventModal] = useState(false);
     const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [activeAudioTrack, setActiveAudioTrack] = useState<AudioTrack | null>(null);
@@ -124,6 +126,56 @@ export default function App() {
         setPendingReelSound(null);
     };
 
+    const handleCreateEvent = (data: Partial<Event>) => {
+        if (!currentUser) return;
+        const newEvent: Event = {
+            id: Date.now(),
+            title: data.title || 'New Event',
+            image: data.image || 'https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?w=800',
+            date: data.date || new Date().toISOString(),
+            time: data.time || '12:00',
+            location: data.location || 'Online',
+            description: data.description || '',
+            organizerId: currentUser.id,
+            attendees: [currentUser.id],
+            interestedIds: []
+        };
+        setEvents([newEvent, ...events]);
+        setShowCreateEventModal(false);
+    };
+
+    const handleJoinEvent = (eventId: number) => {
+        if (!currentUser) return;
+        setEvents(prev => prev.map(e => {
+            if (e.id !== eventId) return e;
+            const isGoing = e.attendees.includes(currentUser.id);
+            return {
+                ...e,
+                attendees: isGoing 
+                    ? e.attendees.filter(id => id !== currentUser.id)
+                    : [...e.attendees, currentUser.id],
+                interestedIds: e.interestedIds.filter(id => id !== currentUser.id)
+            };
+        }));
+    };
+
+    const handleInterestedEvent = (eventId: number) => {
+        if (!currentUser) return;
+        setEvents(prev => prev.map(e => {
+            if (e.id !== eventId) return e;
+            const isInterested = e.interestedIds.includes(currentUser.id);
+            const isGoing = e.attendees.includes(currentUser.id);
+            // Cannot be interested if already going
+            if (isGoing) return e; 
+            return {
+                ...e,
+                interestedIds: isInterested
+                    ? e.interestedIds.filter(id => id !== currentUser.id)
+                    : [...e.interestedIds, currentUser.id]
+            };
+        }));
+    };
+
     const handleReelReact = (reelId: number, type: ReactionType) => {
         if (!currentUser) return;
         setReels(prev => prev.map(r => {
@@ -214,7 +266,7 @@ export default function App() {
                 {view === 'groups' && <GroupsPage currentUser={currentUser} groups={groups} users={users} onCreateGroup={() => {}} onJoinGroup={() => {}} onLeaveGroup={() => {}} onDeleteGroup={() => {}} onUpdateGroupImage={() => {}} onPostToGroup={() => {}} onCreateGroupEvent={() => {}} onInviteToGroup={() => {}} onProfileClick={(id) => { setSelectedUserId(id); setView('profile'); }} onLikePost={() => {}} onOpenComments={() => {}} onSharePost={() => {}} onDeleteGroupPost={() => {}} onRemoveMember={() => {}} onRestrictMember={() => {}} onUpdateGroupSettings={() => {}} />}
                 {view === 'music' && <MusicSystem currentUser={currentUser} songs={songs} episodes={episodes} onUpdateSongs={setSongs} onUpdateEpisodes={setEpisodes} onPlayTrack={setActiveAudioTrack} isPlaying={isPlaying} onTogglePlay={() => setIsPlaying(!isPlaying)} onFeedPost={() => {}} />}
                 {view === 'tools' && <ToolsPage />}
-                {view === 'events' && <EventsPage events={events} currentUser={currentUser} onJoinEvent={() => {}} onCreateEventClick={() => {}} />}
+                {view === 'events' && <EventsPage events={events} currentUser={currentUser} onJoinEvent={handleJoinEvent} onInterestedEvent={handleInterestedEvent} onCreateEventClick={() => setShowCreateEventModal(true)} />}
                 {view === 'profiles' && <ProfilesPage currentUser={currentUser} users={users} groups={groups} brands={brands} onFollowUser={handleFollowUser} onJoinGroup={() => {}} onFollowBrand={() => {}} onProfileClick={(id) => { setSelectedUserId(id); setView('profile'); }} onGroupClick={(g) => { setView('groups'); }} onBrandClick={() => setView('brands')} />}
                 {view === 'brands' && <BrandsPage currentUser={currentUser} brands={brands} posts={posts} users={users} onCreateBrand={() => {}} onFollowBrand={() => {}} onProfileClick={(id) => { setSelectedUserId(id); setView('profile'); }} onPostAsBrand={() => {}} onReact={() => {}} onShare={() => {}} onOpenComments={() => {}} />}
             </main>
@@ -226,6 +278,13 @@ export default function App() {
                     onClose={() => { setShowCreateReelModal(false); setPendingReelSound(null); }} 
                     onCreate={handleCreateReel}
                     initialSound={pendingReelSound}
+                />
+            )}
+            {showCreateEventModal && currentUser && (
+                <CreateEventModal 
+                    currentUser={currentUser}
+                    onClose={() => setShowCreateEventModal(false)}
+                    onCreate={handleCreateEvent}
                 />
             )}
             {fullScreenImage && <ImageViewer imageUrl={fullScreenImage} onClose={() => setFullScreenImage(null)} />}

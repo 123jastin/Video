@@ -1,50 +1,282 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { User, Event } from '../types';
+
+// --- LINKIFY HELPER ---
+const linkify = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text.split(urlRegex).map((part, i) => {
+        if (part.match(urlRegex)) {
+            return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-[#1877F2] hover:underline" onClick={e => e.stopPropagation()}>{part}</a>;
+        }
+        return part;
+    });
+};
+
+// --- SHUFFLE HELPER FOR "ROTATING" FEEL ---
+const shuffleArray = (array: any[]) => {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+};
 
 interface EventsPageProps { 
     events: Event[]; 
     currentUser: User | null; 
     onJoinEvent: (eventId: number) => void; 
+    onInterestedEvent: (eventId: number) => void;
     onCreateEventClick: () => void; 
 }
 
-export const EventsPage: React.FC<EventsPageProps> = ({ events, currentUser, onJoinEvent, onCreateEventClick }) => {
+const CompactEventCard: React.FC<{ 
+    event: Event, 
+    currentUser: User | null, 
+    onClick: () => void,
+    onJoin: (e: React.MouseEvent) => void,
+    onInterested: (e: React.MouseEvent) => void,
+    isWide?: boolean
+}> = ({ event, currentUser, onClick, onJoin, onInterested, isWide }) => {
+    const date = new Date(event.date);
+    const isAttending = currentUser && event.attendees.includes(currentUser.id);
+    const isInterested = currentUser && event.interestedIds.includes(currentUser.id);
+
+    return (
+        <div 
+            onClick={onClick}
+            className={`bg-[#242526] rounded-xl overflow-hidden border border-[#3E4042] flex flex-col hover:bg-[#3A3B3C] transition-all cursor-pointer shadow-md group ${isWide ? 'w-[260px] shrink-0' : 'w-full'}`}
+        >
+            <div className="h-32 relative overflow-hidden">
+                <img src={event.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="" />
+                <div className="absolute top-2 left-2 bg-white/95 text-black rounded-lg px-2 py-1 text-center shadow-lg min-w-[36px]">
+                    <div className="text-[8px] font-black uppercase text-[#1877F2] leading-none">{date.toLocaleString('default', { month: 'short' })}</div>
+                    <div className="text-[14px] font-black leading-tight">{date.getDate()}</div>
+                </div>
+                {event.visibility === 'targeted' && (
+                    <div className="absolute top-2 right-2 bg-[#45BD62] text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow-lg uppercase tracking-tighter">
+                        Local
+                    </div>
+                )}
+            </div>
+            
+            <div className="p-3 flex flex-col flex-1">
+                <h3 className="text-[14px] font-bold text-[#E4E6EB] line-clamp-1 mb-1 leading-tight group-hover:text-[#1877F2] transition-colors">{event.title}</h3>
+                <p className="text-[11px] text-[#B0B3B8] font-medium truncate mb-1">
+                    {date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {event.time}
+                </p>
+                <div className="flex items-center gap-1 text-[10px] font-bold text-[#B0B3B8] mb-3">
+                    <i className="fas fa-users text-[#45BD62] text-[9px]"></i>
+                    <span>{event.attendees.length} going • {event.interestedIds.length} interested</span>
+                </div>
+
+                <div className="mt-auto flex gap-1.5">
+                    <button 
+                        onClick={onInterested}
+                        disabled={!!isAttending}
+                        className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 border ${
+                            isInterested 
+                            ? 'bg-[#FAB400]/20 text-[#FAB400] border-[#FAB400]/30' 
+                            : isAttending 
+                                ? 'opacity-30 cursor-not-allowed' 
+                                : 'bg-[#3A3B3C] text-[#E4E6EB] border-transparent hover:bg-[#4E4F50]'
+                        }`}
+                    >
+                        <i className={`${isInterested ? 'fas' : 'far'} fa-star text-[9px]`}></i>
+                        <span>Interested</span>
+                    </button>
+                    <button 
+                        onClick={onJoin}
+                        className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 shadow-md ${
+                            isAttending 
+                            ? 'bg-[#45BD62] text-white' 
+                            : 'bg-[#1877F2] text-white hover:bg-[#166FE5]'
+                        }`}
+                    >
+                        <i className={`fas ${isAttending ? 'fa-check' : 'fa-plus'} text-[9px]`}></i>
+                        <span>{isAttending ? 'Going' : 'Going'}</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const EventDetailsModal: React.FC<{ event: Event, currentUser: User | null, onClose: () => void, onJoin: () => void, onInterested: () => void }> = ({ event, currentUser, onClose, onJoin, onInterested }) => {
+    const date = new Date(event.date);
+    const isAttending = currentUser && event.attendees.includes(currentUser.id);
+    const isInterested = currentUser && event.interestedIds.includes(currentUser.id);
+
+    return (
+        <div className="fixed inset-0 z-[600] bg-black/90 flex items-center justify-center p-0 sm:p-4 animate-fade-in backdrop-blur-md" onClick={onClose}>
+            <div className="bg-[#242526] w-full max-w-[700px] h-full sm:h-auto sm:max-h-[90vh] sm:rounded-2xl overflow-hidden flex flex-col shadow-2xl border border-[#3E4042]" onClick={e => e.stopPropagation()}>
+                <div className="relative h-[250px] sm:h-[350px] shrink-0">
+                    <img src={event.image} className="w-full h-full object-cover" alt="" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#242526] via-transparent to-transparent"></div>
+                    <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 bg-black/50 rounded-full flex items-center justify-center text-white hover:bg-black/70 transition-all border border-white/10">
+                        <i className="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div className="p-6 overflow-y-auto flex-1">
+                    <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6">
+                        <div>
+                            <p className="text-[#F3425F] font-black uppercase text-sm tracking-widest mb-1">
+                                {date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                            </p>
+                            <h2 className="text-3xl font-black text-white leading-tight">{event.title}</h2>
+                            <div className="flex items-center gap-2 text-[#B0B3B8] font-bold mt-2">
+                                <i className="fas fa-location-dot text-[#1877F2]"></i>
+                                <span>{event.location}</span>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 w-full sm:w-auto">
+                            <button 
+                                onClick={onInterested}
+                                disabled={!!isAttending}
+                                className={`flex-1 sm:px-6 py-2.5 rounded-xl font-black text-[15px] transition-all flex items-center justify-center gap-2 ${
+                                    isInterested 
+                                    ? 'bg-[#FAB400]/20 text-[#FAB400] border border-[#FAB400]/30' 
+                                    : isAttending ? 'opacity-30 cursor-not-allowed' : 'bg-[#3A3B3C] text-[#E4E6EB] hover:bg-[#4E4F50]'
+                                }`}
+                            >
+                                <i className={`${isInterested ? 'fas' : 'far'} fa-star`}></i>
+                                <span>Interested</span>
+                            </button>
+                            <button 
+                                onClick={onJoin}
+                                className={`flex-1 sm:px-8 py-2.5 rounded-xl font-black text-[15px] transition-all flex items-center justify-center gap-2 shadow-lg ${
+                                    isAttending 
+                                    ? 'bg-[#45BD62] text-white' 
+                                    : 'bg-[#1877F2] text-white hover:bg-[#166FE5]'
+                                }`}
+                            >
+                                <i className={`fas ${isAttending ? 'fa-check' : 'fa-plus'}`}></i>
+                                <span>{isAttending ? 'Going' : 'Going'}</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="md:col-span-2 space-y-6">
+                            <div>
+                                <h3 className="text-white font-black uppercase text-xs tracking-widest mb-3 pb-2 border-b border-[#3E4042] w-fit pr-8">Description</h3>
+                                <p className="text-[#E4E6EB] text-[16px] leading-relaxed whitespace-pre-wrap">
+                                    {event.description ? linkify(event.description) : 'No description provided for this event.'}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="space-y-6">
+                            <div className="bg-[#18191A] p-4 rounded-xl border border-[#3E4042]">
+                                <h4 className="text-xs font-black text-[#B0B3B8] uppercase tracking-widest mb-4">Event Details</h4>
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-[#3A3B3C] flex items-center justify-center"><i className="fas fa-clock text-[#1877F2]"></i></div>
+                                        <div>
+                                            <p className="text-white text-sm font-bold">{event.time}</p>
+                                            <p className="text-[10px] text-[#B0B3B8] font-bold">Standard Time</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-[#3A3B3C] flex items-center justify-center"><i className="fas fa-users text-[#45BD62]"></i></div>
+                                        <div>
+                                            <p className="text-white text-sm font-bold">{event.attendees.length} Attendees</p>
+                                            <p className="text-[10px] text-[#B0B3B8] font-bold">{event.interestedIds.length} interested</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-[#3A3B3C] flex items-center justify-center"><i className="fas fa-globe text-[#A033FF]"></i></div>
+                                        <div>
+                                            <p className="text-white text-sm font-bold capitalize">{event.visibility || 'Worldwide'}</p>
+                                            <p className="text-[10px] text-[#B0B3B8] font-bold">Visibility Scope</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export const EventsPage: React.FC<EventsPageProps> = ({ events, currentUser, onJoinEvent, onInterestedEvent, onCreateEventClick }) => {
     const [selectedCategory, setSelectedCategory] = useState('All');
+    const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+    const [shuffledEvents, setShuffledEvents] = useState<Event[]>([]);
     
     const categories = ['All', 'Discover', 'Hosting', 'Upcoming'];
 
+    // Filter logic
     const filteredEvents = useMemo(() => {
-        if (selectedCategory === 'All' || selectedCategory === 'Discover') return events;
-        if (selectedCategory === 'Hosting' && currentUser) return events.filter(e => e.organizerId === currentUser.id);
-        if (selectedCategory === 'Upcoming' && currentUser) return events.filter(e => e.attendees.includes(currentUser.id));
-        return events;
+        let visible = events.filter(event => {
+            if (!event.visibility || event.visibility === 'worldwide') return true;
+            if (event.visibility === 'targeted') {
+                if (!currentUser) return false;
+                const userLoc = currentUser.location?.toLowerCase() || '';
+                const eventLoc = event.location?.toLowerCase() || '';
+                const userRegion = userLoc.split(',').pop()?.trim() || userLoc;
+                const eventRegion = eventLoc.split(',').pop()?.trim() || eventLoc;
+                return userLoc.includes(eventRegion) || eventLoc.includes(userRegion) || userRegion === eventRegion;
+            }
+            return true;
+        });
+
+        if (selectedCategory === 'Hosting' && currentUser) return visible.filter(e => e.organizerId === currentUser.id);
+        if (selectedCategory === 'Upcoming' && currentUser) return visible.filter(e => e.attendees.includes(currentUser.id) || e.interestedIds.includes(currentUser.id));
+        return visible;
     }, [events, selectedCategory, currentUser]);
+
+    // Shuffle only on category change to create the "rotating" feel
+    useEffect(() => {
+        setShuffledEvents(shuffleArray(filteredEvents));
+    }, [filteredEvents]);
+
+    // Split events into chunks for alternating layout
+    const alternatingChunks = useMemo(() => {
+        const chunks = [];
+        let i = 0;
+        let isGrid = true;
+        
+        while (i < shuffledEvents.length) {
+            const count = isGrid ? 4 : 4; // Use 4 items for both to keep balance, or vary
+            chunks.push({
+                type: isGrid ? 'grid' : 'slider',
+                items: shuffledEvents.slice(i, i + count)
+            });
+            i += count;
+            isGrid = !isGrid;
+        }
+        return chunks;
+    }, [shuffledEvents]);
 
     return (
         <div className="w-full max-w-[1000px] mx-auto p-4 font-sans pb-24 animate-fade-in">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 bg-[#242526] p-6 rounded-3xl border border-[#3E4042] shadow-xl">
+            {/* Minimal Header */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 bg-[#242526] p-6 rounded-2xl border border-[#3E4042] shadow-xl">
                 <div>
                     <h1 className="text-3xl font-black text-[#E4E6EB]">Events</h1>
-                    <p className="text-[#B0B3B8] text-lg font-medium mt-1">Discover experiences near you.</p>
+                    <p className="text-[#B0B3B8] text-sm font-bold uppercase tracking-widest mt-1">Happening in your community</p>
                 </div>
                 {currentUser && (
                     <button 
                         onClick={onCreateEventClick}
                         className="bg-[#1877F2] hover:bg-[#166FE5] text-white px-8 py-3 rounded-2xl font-black flex items-center gap-3 transition-all shadow-lg active:scale-95"
                     >
-                        <i className="fas fa-plus-circle text-xl"></i>
-                        <span>Create New Event</span>
+                        <i className="fas fa-calendar-plus text-xl"></i>
+                        <span>Create Event</span>
                     </button>
                 )}
             </div>
 
             {/* Filter Tabs */}
-            <div className="flex gap-2 mb-8 overflow-x-auto scrollbar-hide">
+            <div className="flex gap-2 mb-10 overflow-x-auto scrollbar-hide">
                 {categories.map(cat => (
                     <button 
                         key={cat}
                         onClick={() => setSelectedCategory(cat)}
-                        className={`px-6 py-2.5 rounded-full font-black text-sm whitespace-nowrap border transition-all ${
+                        className={`px-6 py-2.5 rounded-full font-black text-xs uppercase tracking-widest border transition-all ${
                             selectedCategory === cat 
                             ? 'bg-[#1877F2] border-[#1877F2] text-white shadow-lg' 
                             : 'bg-[#242526] border-[#3E4042] text-[#B0B3B8] hover:bg-[#3A3B3C]'
@@ -55,73 +287,64 @@ export const EventsPage: React.FC<EventsPageProps> = ({ events, currentUser, onJ
                 ))}
             </div>
 
-            {filteredEvents.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {filteredEvents.map(event => {
-                        const date = new Date(event.date);
-                        const isInterested = currentUser && event.interestedIds.includes(currentUser.id);
-                        const isAttending = currentUser && event.attendees.includes(currentUser.id);
-
-                        return (
-                            <div key={event.id} className="bg-[#242526] rounded-3xl overflow-hidden border border-[#3E4042] flex flex-col shadow-lg hover:shadow-2xl transition-all group">
-                                <div className="h-48 relative overflow-hidden">
-                                    <img src={event.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt="" />
-                                    <div className="absolute top-4 left-4 bg-white/95 text-black rounded-2xl px-3 py-2 text-center shadow-2xl backdrop-blur-sm min-w-[50px]">
-                                        <div className="text-[10px] font-black uppercase tracking-tighter text-[#1877F2]">{date.toLocaleString('default', { month: 'short' })}</div>
-                                        <div className="text-xl font-black leading-tight">{date.getDate()}</div>
+            {shuffledEvents.length > 0 ? (
+                <div className="space-y-16">
+                    {alternatingChunks.map((chunk, idx) => (
+                        <div key={idx} className="animate-fade-in">
+                            {chunk.type === 'slider' ? (
+                                <div className="relative">
+                                    <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
+                                        {chunk.items.map(event => (
+                                            <CompactEventCard 
+                                                key={event.id}
+                                                event={event}
+                                                currentUser={currentUser}
+                                                isWide={true}
+                                                onClick={() => setSelectedEvent(event)}
+                                                onJoin={(e) => { e.stopPropagation(); onJoinEvent(event.id); }}
+                                                onInterested={(e) => { e.stopPropagation(); onInterestedEvent(event.id); }}
+                                            />
+                                        ))}
                                     </div>
-                                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
-                                        <span className="text-white text-xs font-bold bg-[#1877F2]/80 px-2 py-1 rounded-md">See Details</span>
-                                    </div>
+                                    <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-[#242526] rounded-full flex items-center justify-center shadow-lg border border-[#3E4042] hidden md:flex opacity-50"><i className="fas fa-chevron-left text-[10px]"></i></div>
+                                    <div className="absolute -right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-[#242526] rounded-full flex items-center justify-center shadow-lg border border-[#3E4042] hidden md:flex opacity-50"><i className="fas fa-chevron-right text-[10px]"></i></div>
                                 </div>
-                                
-                                <div className="p-6 flex flex-col flex-1">
-                                    <h3 className="text-xl font-black text-[#E4E6EB] mb-2 line-clamp-1 group-hover:text-[#1877F2] transition-colors">{event.title}</h3>
-                                    
-                                    <div className="space-y-2 mb-6">
-                                        <div className="flex items-center gap-2 text-[#B0B3B8] text-sm font-bold">
-                                            <i className="fas fa-clock text-[#1877F2] w-5 text-center"></i>
-                                            <span>{date.toLocaleDateString()} at {event.time}</span>
-                                        </div>
-                                        <div className="flex items-center gap-2 text-[#B0B3B8] text-sm font-bold">
-                                            <i className="fas fa-map-marker-alt text-[#F3425F] w-5 text-center"></i>
-                                            <span className="truncate">{event.location}</span>
-                                        </div>
-                                        <div className="flex items-center gap-2 text-[#B0B3B8] text-sm font-bold">
-                                            <i className="fas fa-users text-[#45BD62] w-5 text-center"></i>
-                                            <span>{event.attendees.length} going • {event.interestedIds.length} interested</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-auto flex gap-2">
-                                        <button 
-                                            onClick={() => onJoinEvent(event.id)}
-                                            className={`flex-1 py-2.5 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
-                                                isAttending 
-                                                ? 'bg-[#45BD62]/10 text-[#45BD62] border border-[#45BD62]/30' 
-                                                : 'bg-[#3A3B3C] text-[#E4E6EB] hover:bg-[#4E4F50]'
-                                            }`}
-                                        >
-                                            <i className={`fas ${isAttending ? 'fa-check' : 'fa-star'}`}></i>
-                                            {isAttending ? 'Going' : 'Interested'}
-                                        </button>
-                                        <button className="w-12 h-10 bg-[#3A3B3C] rounded-xl flex items-center justify-center text-[#E4E6EB] hover:bg-[#4E4F50] transition-colors">
-                                            <i className="fas fa-share"></i>
-                                        </button>
-                                    </div>
+                            ) : (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    {chunk.items.map(event => (
+                                        <CompactEventCard 
+                                            key={event.id}
+                                            event={event}
+                                            currentUser={currentUser}
+                                            onClick={() => setSelectedEvent(event)}
+                                            onJoin={(e) => { e.stopPropagation(); onJoinEvent(event.id); }}
+                                            onInterested={(e) => { e.stopPropagation(); onInterestedEvent(event.id); }}
+                                        />
+                                    ))}
                                 </div>
-                            </div>
-                        );
-                    })}
+                            )}
+                        </div>
+                    ))}
                 </div>
             ) : (
-                <div className="p-16 text-center text-[#B0B3B8] bg-[#242526] rounded-3xl border border-[#3E4042] shadow-inner">
+                <div className="p-20 text-center text-[#B0B3B8] bg-[#242526] rounded-3xl border border-[#3E4042] shadow-inner">
                     <div className="w-24 h-24 bg-[#3A3B3C] rounded-full flex items-center justify-center mx-auto mb-6">
-                        <i className="fas fa-calendar-times text-5xl"></i>
+                        <i className="fas fa-calendar-xmark text-5xl opacity-20"></i>
                     </div>
                     <h3 className="text-xl font-black text-[#E4E6EB] mb-2">No events found</h3>
-                    <p className="max-w-xs mx-auto font-medium">Try changing your filters or create a new event to get the party started.</p>
+                    <p className="max-w-xs mx-auto font-medium">Try changing your filters or check back later for new gatherings.</p>
                 </div>
+            )}
+
+            {/* Event Detail Modal */}
+            {selectedEvent && (
+                <EventDetailsModal 
+                    event={selectedEvent}
+                    currentUser={currentUser}
+                    onClose={() => setSelectedEvent(null)}
+                    onJoin={() => onJoinEvent(selectedEvent.id)}
+                    onInterested={() => onInterestedEvent(selectedEvent.id)}
+                />
             )}
         </div>
     );

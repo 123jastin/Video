@@ -207,6 +207,7 @@ export interface Event {
     description?: string;
     time?: string;
     location?: string;
+    visibility?: 'targeted' | 'worldwide';
 }
 
 export interface LocationData {

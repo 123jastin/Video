@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { User, Event } from '../types';
 import { LOCATIONS_DATA } from '../constants';
@@ -80,6 +79,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ currentUser,
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
     const [location, setLocation] = useState('');
+    const [visibility, setVisibility] = useState<'worldwide' | 'targeted'>('worldwide');
     const [image, setImage] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -107,6 +107,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ currentUser,
             date: new Date(`${date}T${time}`).toISOString(),
             time,
             location,
+            visibility,
             image: image || 'https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?ixlib=rb-1.2.1&auto=format&fit=crop&w=1500&q=80',
             organizerId: currentUser.id,
             attendees: [currentUser.id],
@@ -116,7 +117,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ currentUser,
     };
 
     return (
-        <div className="fixed inset-0 z-[150] bg-black/80 flex items-center justify-center p-4 animate-fade-in font-sans">
+        <div className="fixed inset-0 z-[500] bg-black/80 flex items-center justify-center p-4 animate-fade-in font-sans">
             <div className="bg-[#242526] w-full max-w-[500px] rounded-xl border border-[#3E4042] shadow-2xl flex flex-col max-h-[90vh]">
                 <div className="p-4 border-b border-[#3E4042] flex justify-between items-center">
                     <h2 className="text-xl font-bold text-[#E4E6EB]">Create Event</h2>
@@ -147,25 +148,65 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ currentUser,
                         <input type="text" className="w-full bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2]" value={title} onChange={e => setTitle(e.target.value)} placeholder="Event name" />
                     </div>
 
-                    <div>
-                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Date & Time</label>
-                        <div className="flex gap-2">
-                            <input type="date" className="flex-1 bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2]" value={date} onChange={e => setDate(e.target.value)} />
-                            <input type="time" className="flex-1 bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2]" value={time} onChange={e => setTime(e.target.value)} />
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Date</label>
+                            <input type="date" className="w-full bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2]" value={date} onChange={e => setDate(e.target.value)} />
+                        </div>
+                        <div>
+                            <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Time</label>
+                            <input type="time" className="w-full bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2]" value={time} onChange={e => setTime(e.target.value)} />
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Location (OSM Professional Search)</label>
+                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Location</label>
                         <LocationSearch value={location} onSelect={setLocation} />
                     </div>
 
                     <div>
-                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Description</label>
-                        <textarea className="w-full bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2] h-20 resize-none" value={desc} onChange={e => setDesc(e.target.value)} placeholder="What are the details?" />
+                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Who should see this?</label>
+                        <div className="flex gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input 
+                                    type="radio" 
+                                    name="visibility" 
+                                    value="worldwide" 
+                                    checked={visibility === 'worldwide'} 
+                                    onChange={() => setVisibility('worldwide')}
+                                    className="accent-[#1877F2]"
+                                />
+                                <span className="text-sm text-[#E4E6EB]">Worldwide</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input 
+                                    type="radio" 
+                                    name="visibility" 
+                                    value="targeted" 
+                                    checked={visibility === 'targeted'} 
+                                    onChange={() => setVisibility('targeted')}
+                                    className="accent-[#1877F2]"
+                                />
+                                <span className="text-sm text-[#E4E6EB]">Only in event location</span>
+                            </label>
+                        </div>
+                        {visibility === 'targeted' && (
+                            <p className="text-[11px] text-[#B0B3B8] mt-1 italic">Shown to users in {location ? location.split(',').pop()?.trim() : 'the selected location'}.</p>
+                        )}
                     </div>
 
-                    <button onClick={handleSubmit} className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white py-2.5 rounded-lg font-bold shadow-md transition-colors">Create Event</button>
+                    <div>
+                        <label className="block text-[#E4E6EB] font-semibold mb-1 text-sm">Description (Links supported)</label>
+                        <textarea 
+                            className="w-full bg-[#3A3B3C] border border-[#3E4042] rounded-lg p-2.5 text-[#E4E6EB] outline-none focus:border-[#1877F2] h-32 resize-none" 
+                            value={desc} 
+                            onChange={e => setDesc(e.target.value)} 
+                            placeholder="Share all the details including website links, instructions, etc." 
+                        />
+                        <p className="text-[10px] text-[#B0B3B8] mt-1 italic">URLs like https://unera.com will be clickable.</p>
+                    </div>
+
+                    <button onClick={handleSubmit} className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white py-3 rounded-lg font-bold shadow-md transition-all active:scale-95">Create Event</button>
                 </div>
             </div>
         </div>
